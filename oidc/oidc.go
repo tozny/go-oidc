@@ -74,6 +74,14 @@ func doRequest(ctx context.Context, req *http.Request) (*http.Response, error) {
 	return client.Do(req.WithContext(ctx))
 }
 
+type ProviderOptions struct {
+	SkipValidateIssuer bool
+	AuthURL            string
+	TokenURL           string
+	UserInfoURL        string
+	JWKSURL            string
+}
+
 // Provider represents an OpenID Connect server's configuration.
 type Provider struct {
 	issuer      string
@@ -121,7 +129,7 @@ var supportedAlgorithms = map[string]bool{
 //
 // The issuer is the URL identifier for the service. For example: "https://accounts.google.com"
 // or "https://login.salesforce.com".
-func NewProvider(ctx context.Context, issuer string) (*Provider, error) {
+func NewProvider(ctx context.Context, issuer string, options ProviderOptions) (*Provider, error) {
 	wellKnown := strings.TrimSuffix(issuer, "/") + "/.well-known/openid-configuration"
 	req, err := http.NewRequest("GET", wellKnown, nil)
 	if err != nil {
@@ -148,7 +156,7 @@ func NewProvider(ctx context.Context, issuer string) (*Provider, error) {
 		return nil, fmt.Errorf("oidc: failed to decode provider discovery object: %v", err)
 	}
 
-	if p.Issuer != issuer {
+	if !options.SkipValidateIssuer && p.Issuer != issuer {
 		return nil, fmt.Errorf("oidc: issuer did not match the issuer returned by provider, expected %q got %q", issuer, p.Issuer)
 	}
 	var algs []string
@@ -157,15 +165,23 @@ func NewProvider(ctx context.Context, issuer string) (*Provider, error) {
 			algs = append(algs, a)
 		}
 	}
+
 	return &Provider{
 		issuer:       p.Issuer,
-		authURL:      p.AuthURL,
-		tokenURL:     p.TokenURL,
-		userInfoURL:  p.UserInfoURL,
+		authURL:      stringWithFallback(options.AuthURL, p.AuthURL),
+		tokenURL:     stringWithFallback(options.TokenURL, p.TokenURL),
+		userInfoURL:  stringWithFallback(options.UserInfoURL, p.UserInfoURL),
 		algorithms:   algs,
 		rawClaims:    body,
-		remoteKeySet: NewRemoteKeySet(cloneContext(ctx), p.JWKSURL),
+		remoteKeySet: NewRemoteKeySet(cloneContext(ctx), stringWithFallback(options.JWKSURL, p.JWKSURL)),
 	}, nil
+}
+
+func stringWithFallback(value string, fallback string) string {
+	if value == "" {
+		return fallback
+	}
+	return value
 }
 
 // Claims unmarshals raw fields returned by the server during discovery.
