@@ -185,6 +185,48 @@ func parseClaim(raw []byte, name string, v interface{}) error {
 	return json.Unmarshal([]byte(val), v)
 }
 
+// UnmarshalToken takes a raw token string, decoding it into an ID Token.
+func UnmarshalToken(rawIDToken string) (*IDToken, *idToken, error) {
+	// Throw out tokens with invalid claims before trying to verify the token. This lets
+	// us do cheap checks before possibly re-syncing keys.
+	payload, err := parseJWT(rawIDToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("oidc: malformed jwt: %v", err)
+	}
+	var token idToken
+	if err := json.Unmarshal(payload, &token); err != nil {
+		return nil, nil, fmt.Errorf("oidc: failed to unmarshal claims: %v", err)
+	}
+
+	distributedClaims := make(map[string]claimSource)
+
+	//step through the token to map claim names to claim sources"
+	for cn, src := range token.ClaimNames {
+		if src == "" {
+			return nil, nil, fmt.Errorf("oidc: failed to obtain source from claim name")
+		}
+		s, ok := token.ClaimSources[src]
+		if !ok {
+			return nil, nil, fmt.Errorf("oidc: source does not exist")
+		}
+		distributedClaims[cn] = s
+	}
+
+	t := &IDToken{
+		Issuer:            token.Issuer,
+		Subject:           token.Subject,
+		Audience:          []string(token.Audience),
+		Expiry:            time.Time(token.Expiry),
+		IssuedAt:          time.Time(token.IssuedAt),
+		Nonce:             token.Nonce,
+		AccessTokenHash:   token.AtHash,
+		claims:            payload,
+		distributedClaims: distributedClaims,
+	}
+
+	return t, &token, nil
+}
+
 // Verify parses a raw ID Token, verifies it's been signed by the provider, performs
 // any additional checks depending on the Config, and returns the payload.
 //
@@ -211,41 +253,9 @@ func (v *IDTokenVerifier) Verify(ctx context.Context, rawIDToken string) (*IDTok
 		return nil, fmt.Errorf("oidc: malformed jwt: %v", err)
 	}
 
-	// Throw out tokens with invalid claims before trying to verify the token. This lets
-	// us do cheap checks before possibly re-syncing keys.
-	payload, err := parseJWT(rawIDToken)
+	t, token, err := UnmarshalToken(rawIDToken)
 	if err != nil {
-		return nil, fmt.Errorf("oidc: malformed jwt: %v", err)
-	}
-	var token idToken
-	if err := json.Unmarshal(payload, &token); err != nil {
-		return nil, fmt.Errorf("oidc: failed to unmarshal claims: %v", err)
-	}
-
-	distributedClaims := make(map[string]claimSource)
-
-	//step through the token to map claim names to claim sources"
-	for cn, src := range token.ClaimNames {
-		if src == "" {
-			return nil, fmt.Errorf("oidc: failed to obtain source from claim name")
-		}
-		s, ok := token.ClaimSources[src]
-		if !ok {
-			return nil, fmt.Errorf("oidc: source does not exist")
-		}
-		distributedClaims[cn] = s
-	}
-
-	t := &IDToken{
-		Issuer:            token.Issuer,
-		Subject:           token.Subject,
-		Audience:          []string(token.Audience),
-		Expiry:            time.Time(token.Expiry),
-		IssuedAt:          time.Time(token.IssuedAt),
-		Nonce:             token.Nonce,
-		AccessTokenHash:   token.AtHash,
-		claims:            payload,
-		distributedClaims: distributedClaims,
+		return nil, err
 	}
 
 	// Check issuer.
@@ -322,7 +332,7 @@ func (v *IDTokenVerifier) Verify(ctx context.Context, rawIDToken string) (*IDTok
 	}
 
 	// Ensure that the payload returned by the square actually matches the payload parsed earlier.
-	if !bytes.Equal(gotPayload, payload) {
+	if !bytes.Equal(gotPayload, t.claims) {
 		return nil, errors.New("oidc: internal error, payload parsed did not match previous payload")
 	}
 
