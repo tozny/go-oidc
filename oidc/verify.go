@@ -2,10 +2,12 @@ package oidc
 
 import (
 	"context"
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"io"
 	"net/http"
+	"strings"
 	"time"
 
 	jose "github.com/go-jose/go-jose/v4"
@@ -141,6 +143,18 @@ func (p *Provider) newVerifier(keySet KeySet, config *Config) *IDTokenVerifier {
 	return NewVerifier(p.issuer, keySet, config)
 }
 
+func parseJWT(p string) ([]byte, error) {
+	parts := strings.Split(p, ".")
+	if len(parts) < 2 {
+		return nil, fmt.Errorf("oidc: malformed jwt, expected 3 parts got %d", len(parts))
+	}
+	payload, err := base64.RawURLEncoding.DecodeString(parts[1])
+	if err != nil {
+		return nil, fmt.Errorf("oidc: malformed jwt payload: %v", err)
+	}
+	return payload, nil
+}
+
 func contains(sli []string, ele string) bool {
 	for _, s := range sli {
 		if s == ele {
@@ -181,6 +195,62 @@ func resolveDistributedClaim(ctx context.Context, verifier *IDTokenVerifier, src
 	}
 
 	return token.claims, nil
+}
+
+func parseClaim(raw []byte, name string, v interface{}) error {
+	var parsed map[string]json.RawMessage
+	if err := json.Unmarshal(raw, &parsed); err != nil {
+		return err
+	}
+
+	val, ok := parsed[name]
+	if !ok {
+		return fmt.Errorf("claim doesn't exist: %s", name)
+	}
+
+	return json.Unmarshal([]byte(val), v)
+}
+
+// UnmarshalToken takes a raw token string, decoding it into an ID Token.
+func UnmarshalToken(rawIDToken string) (*IDToken, *idToken, error) {
+	// Throw out tokens with invalid claims before trying to verify the token. This lets
+	// us do cheap checks before possibly re-syncing keys.
+	payload, err := parseJWT(rawIDToken)
+	if err != nil {
+		return nil, nil, fmt.Errorf("oidc: malformed jwt: %v", err)
+	}
+	var token idToken
+	if err := json.Unmarshal(payload, &token); err != nil {
+		return nil, nil, fmt.Errorf("oidc: failed to unmarshal claims: %v", err)
+	}
+
+	distributedClaims := make(map[string]claimSource)
+
+	//step through the token to map claim names to claim sources"
+	for cn, src := range token.ClaimNames {
+		if src == "" {
+			return nil, nil, fmt.Errorf("oidc: failed to obtain source from claim name")
+		}
+		s, ok := token.ClaimSources[src]
+		if !ok {
+			return nil, nil, fmt.Errorf("oidc: source does not exist")
+		}
+		distributedClaims[cn] = s
+	}
+
+	t := &IDToken{
+		Issuer:            token.Issuer,
+		Subject:           token.Subject,
+		Audience:          []string(token.Audience),
+		Expiry:            time.Time(token.Expiry),
+		IssuedAt:          time.Time(token.IssuedAt),
+		Nonce:             token.Nonce,
+		AccessTokenHash:   token.AtHash,
+		claims:            payload,
+		distributedClaims: distributedClaims,
+	}
+
+	return t, &token, nil
 }
 
 // Verify parses a raw ID Token, verifies it's been signed by the provider, performs
