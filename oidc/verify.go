@@ -197,20 +197,6 @@ func resolveDistributedClaim(ctx context.Context, verifier *IDTokenVerifier, src
 	return token.claims, nil
 }
 
-func parseClaim(raw []byte, name string, v interface{}) error {
-	var parsed map[string]json.RawMessage
-	if err := json.Unmarshal(raw, &parsed); err != nil {
-		return err
-	}
-
-	val, ok := parsed[name]
-	if !ok {
-		return fmt.Errorf("claim doesn't exist: %s", name)
-	}
-
-	return json.Unmarshal([]byte(val), v)
-}
-
 // UnmarshalToken takes a raw token string, decoding it into an ID Token.
 func UnmarshalToken(rawIDToken string) (*IDToken, *idToken, error) {
 	// Throw out tokens with invalid claims before trying to verify the token. This lets
