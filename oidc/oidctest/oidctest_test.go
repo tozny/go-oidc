@@ -9,8 +9,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/coreos/go-oidc/v3/oidc"
-	"github.com/coreos/go-oidc/v3/oidc/oidctest"
+	"github.com/tozny/go-oidc/v3/oidc"
+	"github.com/tozny/go-oidc/v3/oidc/oidctest"
 )
 
 func TestServer(t *testing.T) {
